@@ -45,7 +45,8 @@ save the arrangement as a profile. The full manual is in
   workspace running one of the plugin's layouts sticks instead of being undone
   at the next sync, and floating is left to Omarchy.
 - **Borders that only show when focus moves.** Optional (`borders → flash on
-  focus` at the foot of the panel): all borders stay transparent and the
+  focus` at the foot of the panel): all borders stay transparent, tab-group
+  borders included, and the
   active one shows in your theme's colour for two seconds after a focus
   change. Made for OLED panels. It changes colours only, so windows are not
   resized on every focus change the way a `border_size` toggle does.

@@ -1061,6 +1061,80 @@ test("turning flashing off hands the theme its colours back",
     assert.deepEqual(borderLua(off, []), [])
   })
 
+// A tab group draws its own border (group.col.*), which the window colours do
+// not cover: on an OLED a grouped window kept a lit border for good.
+function groupBorderLua(configs, setup) {
+  return runLua([
+    lua_prelude(),
+    "LOG = {}",
+    "HANDLERS = {}",
+    "TIMERS = {}",
+    "CONFIG = {",
+    "  ['general.col.active_border'] = { colors = { '0xFF7AA2F7' } },",
+    "  ['general.col.inactive_border'] = { colors = { '0xAA595959' } },",
+    "  ['group.col.border_active'] = { colors = { '0xFF7AA2F7' } },",
+    "  ['group.col.border_inactive'] = { colors = { '0x00000000' } },",
+    "  ['group.col.border_locked_active'] = { colors = { '0x66775500' } },",
+    "  ['group.col.border_locked_inactive'] = { colors = { '0x66FF5500' } },",
+    "}",
+    "hl.get_config = function(key) return CONFIG[key] end",
+    "local function show(v) if type(v) == 'table' then return v.colors[1] end return tostring(v) end",
+    "hl.config = function(spec)",
+    "  local parts = {}",
+    "  for _, section in ipairs({ 'general', 'group' }) do",
+    "    local col = spec[section] and spec[section].col or {}",
+    "    local keys = {}",
+    "    for k in pairs(col) do keys[#keys + 1] = k end",
+    "    table.sort(keys)",
+    "    for _, k in ipairs(keys) do parts[#parts + 1] = section .. '.' .. k .. '=' .. show(col[k]) end",
+    "  end",
+    "  LOG[#LOG + 1] = table.concat(parts, ' ')",
+    "end",
+    "hl.on = function(name, fn) HANDLERS[name] = fn; return { remove = function() HANDLERS[name] = nil end } end",
+    "hl.timer = function(fn, opts) local t = { fn = fn, on = true }",
+    "  t.set_enabled = function(self, v) self.on = v end; TIMERS[#TIMERS + 1] = t; return t end",
+    ...(setup || []),
+    ...configs.map((c) => typeof c === "string" ? c : Model.generateLua(c, [1])),
+    "print(table.concat(LOG, '\\n'))"
+  ].join("\n")).trim().split("\n").filter((line) => line !== "")
+}
+
+test("flashing also hides a tab group's borders and restores them",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    const on = Model.normalizeConfig({ focusBorder: "flash" })
+    const off = Model.normalizeConfig({})
+    const hidden = "general.active_border=rgba(00000000) general.inactive_border=rgba(00000000) " +
+      "group.border_active=rgba(00000000) group.border_inactive=rgba(00000000) " +
+      "group.border_locked_active=rgba(00000000) group.border_locked_inactive=rgba(00000000)"
+    const log = groupBorderLua([on,
+      "HANDLERS['window.active']()",
+      "TIMERS[1].fn()",
+      // Hyprland now reports our transparency everywhere.
+      "for k in pairs(CONFIG) do CONFIG[k] = { colors = { '0x00000000' } } end",
+      off])
+    assert.deepEqual(log, [
+      hidden,
+      // Focus: the window and both group "active" colours, nothing inactive.
+      "general.active_border=0xFF7AA2F7 group.border_active=0xFF7AA2F7 group.border_locked_active=0x66775500",
+      hidden,
+      // Off: every colour the theme had, and a transparent one stays transparent.
+      "general.active_border=0xFF7AA2F7 general.inactive_border=0xAA595959 " +
+        "group.border_active=0xFF7AA2F7 group.border_locked_active=0x66775500 group.border_locked_inactive=0x66FF5500"
+    ])
+  })
+
+test("a running runtime that kept only window colours upgrades without losing them",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    // What the previous runtime left in _G.__omarchy_wsl while borders were hidden.
+    const log = groupBorderLua([Model.normalizeConfig({ focusBorder: "flash" }), "HANDLERS['window.active']()"], [
+      "_G.__omarchy_wsl = { registered = {}, rules = {}, border_hidden = true,",
+      "  border_active = { colors = { '0xFF123456' } }, border_inactive = { colors = { '0xAA654321' } } }",
+      "CONFIG['general.col.active_border'] = { colors = { '0x00000000' } }",
+      "CONFIG['general.col.inactive_border'] = { colors = { '0x00000000' } }"
+    ])
+    assert.equal(log[1], "general.active_border=0xFF123456 group.border_active=0xFF7AA2F7 group.border_locked_active=0x66775500")
+  })
+
 test("the border setting is clamped and survives normalization", () => {
   assert.equal(Model.normalizeFocusBorderMs(50), 300)
   assert.equal(Model.normalizeFocusBorderMs(99999), 10000)
