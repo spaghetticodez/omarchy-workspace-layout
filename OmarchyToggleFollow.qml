@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "Shared.js" as Shared
 
 // Follow changed Super+L files. A directory rescan is not a new layout choice.
 Item {
@@ -41,7 +42,9 @@ Item {
       return
     }
     var current = Model.parseOmarchyToggleSnapshot(text)
-    var changes = Model.omarchyToggleChanges(snapshot, current, scanLive)
+    var changes = Model.omarchyToggleChanges(snapshot, current, scanLive).filter(function(change) {
+      return change.removed === undefined || !Shared.wasForgotten(change.workspace)
+    })
     snapshot = current
     var next = Model.followOmarchyToggles(config, changes, { workspaceMonitors: workspaceMonitors })
     if (next) followed(next)
@@ -75,8 +78,8 @@ Item {
       "-e", "close_write", "-e", "create", "-e", "moved_to", "--format", "%f", root.dir]
     stdout: SplitParser {
       onRead: function(line) {
-        var match = /^(\d+)\.lua$/.exec(String(line))
-        var key = match ? Model.normalizeWorkspaceId(match[1]) : null
+        var match = /^(\d+|default)\.lua$/.exec(String(line))
+        var key = match ? (match[1] === "default" ? "default" : Model.normalizeWorkspaceId(match[1])) : null
         if (key === null) return
         var pending = root.pendingLive
         pending[key] = true
@@ -92,7 +95,7 @@ Item {
     command: ["sh", "-c",
       "[ -d \"$1\" ] && [ -r \"$1\" ] || exit 1; " +
       "for file in \"$1\"/*.lua; do [ -f \"$file\" ] || continue; " +
-      "name=${file##*/}; id=${name%.lua}; case $id in ''|*[!0-9]*) continue;; esac; " +
+      "name=${file##*/}; id=${name%.lua}; case $id in default) ;; ''|*[!0-9]*) continue;; esac; " +
       "stamp=$(stat -Lc '%i:%y:%z:%s' -- \"$file\") || continue; " +
       "content=$(cat -- \"$file\") || continue; " +
       "printf '\\036%s\\037%s\\037%s\\n' \"$id\" \"$stamp\" \"$content\"; done",
@@ -111,9 +114,15 @@ Item {
 
   function forget(ids) {
     var command = ["rm", "-f", "--"]
+    var known = snapshot
     for (var i = 0; i < ids.length; i++) {
       var key = Model.normalizeWorkspaceId(ids[i])
-      if (key !== null) command.push(dir + "/" + key + ".lua")
+      if (key === null) continue
+      command.push(dir + "/" + key + ".lua")
+      // Our own deletion is not Omarchy handing the workspace back to the
+      // default, so no copy of this watcher may read it as one.
+      Shared.forget(key)
+      if (known && known[key]) delete known[key]
     }
     if (command.length === 3) return
     forgetProcess.command = command

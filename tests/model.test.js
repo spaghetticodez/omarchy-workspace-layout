@@ -2290,6 +2290,97 @@ test("the panel and the service follow Omarchy's Super+L files", () => {
   assert.match(service, /OmarchyToggleFollow/)
 })
 
+// Omarchy 4.5 rewrote Super+L: `o.workspace_mode({ workspace, mode })` instead
+// of a workspace rule, a `default.lua` for every workspace without a file,
+// a floating mode, and deletion of the file when a workspace cycles back
+// onto the default.
+function toggleRecord(id, stamp, body) {
+  return "\u001e" + id + "\u001f" + stamp + "\u001f" + body + "\n"
+}
+
+test("Omarchy 4.5's workspace_mode files parse like the old rules", () => {
+  assert.deepEqual(Model.parseOmarchyToggleFiles(
+    'o.workspace_mode({ workspace = "3", mode = "scrolling" })'
+  ), [{ workspace: "3", layout: "scrolling" }])
+  // Floating is no tiled layout; Omarchy floats the windows itself.
+  assert.deepEqual(Model.parseOmarchyToggleFiles(
+    'o.workspace_mode({ workspace = "4", mode = "floating" })'
+  ), [])
+  const snap = Model.parseOmarchyToggleSnapshot(
+    toggleRecord("3", "s1", 'o.workspace_mode({ workspace = "3", mode = "scrolling" })') +
+    toggleRecord("4", "s2", 'o.workspace_mode({ workspace = "4", mode = "floating" })') +
+    toggleRecord("default", "s3", 'o.workspace_mode({ default = "scrolling" })'))
+  assert.deepEqual(snap, {
+    3: { layout: "scrolling", stamp: "s1" },
+    4: { layout: "floating", stamp: "s2" },
+    default: { layout: "scrolling", stamp: "s3" }
+  })
+  assert.equal(Model.parseOmarchyDefault('o.workspace_mode({ default = "floating" })'), null)
+})
+
+test("Super+L on Omarchy 4.5 is written into the active profile", () => {
+  const config = Model.normalizeConfig({
+    profiles: [{ name: "default", fallback: "dwindle", assignments: {} }]
+  })
+  const snap = Model.parseOmarchyToggleSnapshot(
+    toggleRecord("3", "s1", 'o.workspace_mode({ workspace = "3", mode = "scrolling" })'))
+  const changes = Model.omarchyToggleChanges({}, snap, { 3: true })
+  const next = Model.followOmarchyToggles(config, changes)
+  assert.equal(next.profiles[0].assignments["3"], "scrolling")
+  assert.match(Model.generateLua(next, [3]), /W\.set_workspace\("3", "scrolling"\)/)
+})
+
+test("a floating Super+L file changes nothing the plugin tiles", () => {
+  const config = Model.normalizeConfig({
+    profiles: [{ name: "default", fallback: "dwindle", assignments: { 4: "scrolling" } }]
+  })
+  const before = { 4: { layout: "scrolling", stamp: "s1" } }
+  const snap = Model.parseOmarchyToggleSnapshot(
+    toggleRecord("4", "s2", 'o.workspace_mode({ workspace = "4", mode = "floating" })'))
+  assert.equal(Model.followOmarchyToggles(config, Model.omarchyToggleChanges(before, snap, { 4: true })), null)
+})
+
+test("Omarchy's default layout becomes the profile fallback", () => {
+  const config = Model.normalizeConfig({
+    profiles: [{ name: "default", fallback: "dwindle", assignments: {} }]
+  })
+  const snap = Model.parseOmarchyToggleSnapshot(
+    toggleRecord("default", "s1", 'o.workspace_mode({ default = "scrolling" })'))
+  const next = Model.followOmarchyToggles(config, Model.omarchyToggleChanges(null, snap, {}))
+  assert.equal(next.profiles[0].fallback, "scrolling")
+  // Unassigned workspaces no longer get a dwindle rule laid over Omarchy's choice.
+  assert.match(Model.generateLua(next, [5]), /W\.set_workspace\("5", "scrolling"\)/)
+
+  // A profile falling back to a plugin layout keeps it at startup...
+  const custom = Model.normalizeConfig({
+    layouts: [{ id: "focus", name: "Focus", weights: [25, 50, 25] }],
+    profiles: [{ name: "default", fallback: "focus", assignments: {} }]
+  })
+  assert.equal(Model.followOmarchyToggles(custom, Model.omarchyToggleChanges(null, snap, {})), null)
+  // ...but a default chosen while the shell runs is an explicit choice.
+  const live = Model.followOmarchyToggles(custom, Model.omarchyToggleChanges({}, snap, { default: true }))
+  assert.equal(live.profiles[0].fallback, "scrolling")
+})
+
+test("a Super+L file Omarchy deletes hands the workspace back to the default", () => {
+  const config = Model.normalizeConfig({
+    layouts: [{ id: "focus", name: "Focus", weights: [25, 50, 25] }],
+    profiles: [{ name: "default", fallback: "dwindle", assignments: { 3: "scrolling", 6: "focus" } }]
+  })
+  const before = {
+    3: { layout: "scrolling", stamp: "s1" },
+    6: { layout: "scrolling", stamp: "s2" }
+  }
+  const changes = Model.omarchyToggleChanges(before, {}, {})
+  const next = Model.followOmarchyToggles(config, changes)
+  assert.equal(next.profiles[0].assignments["3"], undefined)
+  assert.equal(Model.layoutIdForWorkspace(next, 3), "dwindle")
+  // A custom layout given since is the user's, not the file's.
+  assert.equal(next.profiles[0].assignments["6"], "focus")
+  // Startup cannot see a deletion.
+  assert.deepEqual(Model.omarchyToggleChanges(null, {}, {}), [])
+})
+
 // ----------------------------------------------------------------- loader
 
 test("the Hyprland loader line is added once and only once", () => {
@@ -2739,7 +2830,11 @@ test("Super+L snapshots preserve file identity and ignore unrelated contents", (
   assert.deepEqual(Model.omarchyToggleChanges(snapshot, changed, {}), [
     { workspace: "2", layout: "scrolling", onlyBuiltins: false }
   ])
-  assert.deepEqual(Model.omarchyToggleChanges(snapshot, { 4: snapshot[4] }, {}), [])
+  // A file that vanished between two scans is Omarchy 4.5 handing the
+  // workspace back to the default layout.
+  assert.deepEqual(Model.omarchyToggleChanges(snapshot, { 4: snapshot[4] }, {}), [
+    { workspace: "2", layout: null, removed: "scrolling" }
+  ])
   assert.deepEqual(Model.omarchyToggleChanges(snapshot, snapshot, { 4: true }), [
     { workspace: "4", layout: "dwindle", onlyBuiltins: false }
   ])

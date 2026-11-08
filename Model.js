@@ -1515,9 +1515,14 @@ function parseOmarchyToggleLua(text) {
   return matches.length > 0 ? matches[0] : null
 }
 
+// Omarchy 4.0 wrote `hl.workspace_rule({ workspace = "6", layout = "scrolling" })`;
+// 4.5 writes `o.workspace_mode({ workspace = "6", mode = "scrolling" })` and
+// adds a third mode, `floating`, which is not a tiled layout at all: Omarchy
+// floats the windows itself and keeps whatever tiled layout the workspace had.
+// Both spellings are read; `floating` fails isBuiltin and is left to Omarchy.
 function parseOmarchyToggleFiles(text) {
   var source = String(text || "")
-  var re = /workspace\s*=\s*"(\d+)"\s*,\s*layout\s*=\s*"([^"]+)"/g
+  var re = /workspace\s*=\s*"(\d+)"\s*,\s*(?:layout|mode)\s*=\s*"([^"]+)"/g
   var out = []
   var match
   while ((match = re.exec(source)) !== null) {
@@ -1529,20 +1534,41 @@ function parseOmarchyToggleFiles(text) {
   return out
 }
 
+// Omarchy 4.5's `default.lua`: the layout of every workspace without a file
+// of its own, chosen under Appearance > Workspace Layout. Null for floating,
+// which this plugin cannot express as a fallback.
+function parseOmarchyDefault(text) {
+  var match = /o\.workspace_mode\(\s*\{\s*default\s*=\s*"([a-z]+)"/.exec(String(text || ""))
+  if (!match || !isBuiltin(match[1])) return null
+  return match[1]
+}
+
 // Records contain a workspace id, a stat fingerprint, and the file's Lua text.
+// The record named `default` is Omarchy 4.5's default layout.
 function parseOmarchyToggleSnapshot(text) {
   var out = {}
   var records = String(text || "").split("\u001e")
   for (var i = 0; i < records.length; i++) {
     var fields = records[i].split("\u001f")
     if (fields.length < 3) continue
+    if (fields[0] === "default") {
+      var fallback = fields[1] === "" ? null : parseOmarchyDefault(fields.slice(2).join("\u001f"))
+      if (fallback !== null) out["default"] = { layout: fallback, stamp: fields[1] }
+      continue
+    }
     var key = normalizeWorkspaceId(fields[0])
     if (key === null || fields[1] === "") continue
-    var assignments = parseOmarchyToggleFiles(fields.slice(2).join("\u001f"))
+    var body = fields.slice(2).join("\u001f")
+    var assignments = parseOmarchyToggleFiles(body)
     for (var j = 0; j < assignments.length; j++) {
       if (assignments[j].workspace !== key) continue
       out[key] = { layout: assignments[j].layout, stamp: fields[1] }
       break
+    }
+    // A floating file is still a file: recorded so it is not mistaken for a
+    // deletion, and ignored by followOmarchyToggles because it is no layout.
+    if (!out[key] && new RegExp('workspace\\s*=\\s*"' + key + '"\\s*,\\s*mode\\s*=\\s*"floating"').test(body)) {
+      out[key] = { layout: "floating", stamp: fields[1] }
     }
   }
   return out
@@ -1558,6 +1584,17 @@ function omarchyToggleChanges(previous, snapshot, liveIds) {
     if (!first && !live[key] && before[key]
       && before[key].stamp === record.stamp && before[key].layout === record.layout) continue
     out.push({ workspace: key, layout: record.layout, onlyBuiltins: first && !live[key] })
+  }
+  // Omarchy 4.5 deletes a workspace's file when Super+L cycles it back onto
+  // the default, so that a later change of default reaches it too. A file
+  // that vanished between two scans is that: the workspace follows the
+  // default again. Nothing at startup can tell a deletion from a file that
+  // was never there, so only a running watcher reports one.
+  if (!first) {
+    for (key in before) {
+      if (snapshot[key] || key === "default") continue
+      out.push({ workspace: key, layout: null, removed: before[key].layout })
+    }
   }
   return out
 }
@@ -1576,13 +1613,42 @@ function followOmarchyToggles(config, assignments, opts) {
   var draft = null
   var profile = null
   for (var i = 0; i < list.length; i++) {
+    var onlyBuiltins = list[i] && list[i].onlyBuiltins !== undefined ? list[i].onlyBuiltins : options.onlyBuiltins
+    if (list[i] && list[i].workspace === "default") {
+      // Omarchy's default layout is this profile's fallback, unless the
+      // profile falls back to one of this plugin's own layouts and the file
+      // is only being read at startup.
+      var fallback = String(list[i].layout || "")
+      var holder = activeProfile(draft || normalized)
+      if (!isBuiltin(fallback) || holder.fallback === fallback) continue
+      if (onlyBuiltins && !isBuiltin(holder.fallback)) continue
+      if (!draft) {
+        draft = JSON.parse(JSON.stringify(normalized))
+        profile = activeProfile(draft)
+      }
+      profile.fallback = fallback
+      continue
+    }
     var workspace = normalizeWorkspaceId(list[i] && list[i].workspace)
+    if (workspace === null) continue
+    if (list[i].removed !== undefined) {
+      // A custom layout the user has since given the workspace keeps it; a
+      // built-in one came from Super+L (or matches what it would pick), and
+      // the workspace now follows the default.
+      var held = activeProfile(draft || normalized).assignments[workspace]
+      if (held === undefined || !isBuiltin(held)) continue
+      if (!draft) {
+        draft = JSON.parse(JSON.stringify(normalized))
+        profile = activeProfile(draft)
+      }
+      delete profile.assignments[workspace]
+      continue
+    }
     var layout = String((list[i] && list[i].layout) || "")
-    if (workspace === null || !isBuiltin(layout)) continue
+    if (!isBuiltin(layout)) continue
     var monitors = options.workspaceMonitors || {}
     var current = layoutIdForWorkspace(draft || normalized, workspace, monitors[workspace])
     if (current === layout) continue
-    var onlyBuiltins = list[i].onlyBuiltins === undefined ? options.onlyBuiltins : list[i].onlyBuiltins
     if (onlyBuiltins && !isBuiltin(current)) continue
     if (!draft) {
       draft = JSON.parse(JSON.stringify(normalized))
@@ -3736,6 +3802,7 @@ if (typeof module !== "undefined") {
     parseOmarchyToggleLua: parseOmarchyToggleLua,
     parseOmarchyToggleFiles: parseOmarchyToggleFiles,
     parseOmarchyToggleSnapshot: parseOmarchyToggleSnapshot,
+    parseOmarchyDefault: parseOmarchyDefault,
     omarchyToggleChanges: omarchyToggleChanges,
     followOmarchyToggles: followOmarchyToggles,
     normalizeAppMatch: normalizeAppMatch,

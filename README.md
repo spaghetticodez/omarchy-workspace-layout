@@ -56,8 +56,11 @@ A list of everything it does is in [docs/features.md](docs/features.md).
 ## Using it
 
 Click the bar icon — it is a live miniature of the current workspace's layout.
-Omarchy's `Super + L` dwindle/scrolling toggle is followed, so the picture
-matches the workspace Hyprland is actually tiling.
+Omarchy's `Super + L` toggle is followed, so the picture matches the workspace
+Hyprland is actually tiling. That covers both the Omarchy 4.0 rule files and
+Omarchy 4.5's `o.workspace_mode` files: the default layout chosen under
+Appearance becomes the profile's fallback, a workspace cycled back onto the
+default follows it again, and a floating workspace is left to Omarchy.
 The panel scrolls when it outgrows the screen, and `Esc` closes it — everything
 else in it is pointed at rather than typed.
 
