@@ -607,6 +607,8 @@ Panel {
     if (command !== "") pin.command = command
     var group = changes.group !== undefined ? changes.group : previous.group
     if (group > 0) pin.group = group
+    var open = changes.open !== undefined ? changes.open : previous.open
+    if (open !== undefined) pin.open = open
     target.pins[match] = Model.normalizePin(pin)
   }
 
@@ -761,11 +763,11 @@ Panel {
     })
   }
 
-  function saveAppPin(original, match, workspace, slots, command, name, group) {
+  function saveAppPin(original, match, workspace, slots, command, name, group, open) {
     if (!editable) return false
     var previous = Model.activeProfile(config).pins[original]
     var wasGrouped = previous && previous.group > 0
-    var next = Model.editedPin(config, original, match, workspace, slots, command, name, group)
+    var next = Model.editedPin(config, original, match, workspace, slots, command, name, group, open)
     if (!next || !store.save(next)) return false
     appEditor.opened = false
     refreshAppState()
@@ -2450,8 +2452,8 @@ Panel {
             config: root.config
             foreground: root.fg
             accent: root.accent
-            onSaved: function(original, match, workspace, slots, command, name, group) {
-              root.saveAppPin(original, match, workspace, slots, command, name, group)
+            onSaved: function(original, match, workspace, slots, command, name, group, open) {
+              root.saveAppPin(original, match, workspace, slots, command, name, group, open)
             }
             onCancelled: keyCatcher.forceActiveFocus()
           }
@@ -2518,10 +2520,12 @@ Panel {
                     text: {
                       if (appRow.modelData.pinned) {
                         var pin = root.profile.pins[appRow.modelData.match]
-                        if (pin && pin.group) return pin.group + (pin.group === 1 ? " tab" : " tabs")
+                        var route = pin && pin.open === "here" ? " \u00b7 opens here"
+                          : (pin && pin.open === "first" ? " \u00b7 first only" : "")
+                        if (pin && pin.group) return pin.group + (pin.group === 1 ? " tab" : " tabs") + route
                         var slots = appRow.modelData.slots
-                        if (slots.length === 0) return "any slot"
-                        return (slots.length === 1 ? "slot " : "slots ") + slots.join(", ")
+                        if (slots.length === 0) return "any slot" + route
+                        return (slots.length === 1 ? "slot " : "slots ") + slots.join(", ") + route
                       }
                       if (appRow.modelData.elsewhere !== "") return "on " + appRow.modelData.elsewhere
                       if (appRow.modelData.literal) return "as typed"

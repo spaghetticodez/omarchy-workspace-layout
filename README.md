@@ -163,6 +163,14 @@ you pin it; after that they are yours to move wherever you like. An app can only
 be pinned in one place, so pinning it under another workspace moves the pin
 rather than adding a second.
 
+A pin sends every new window of the app to its workspace, which is wrong for a
+terminal you also open everywhere else. `Edit` on a pin has a **New windows**
+choice: *always* (the default), *first window* — only while the app has no
+window on its workspace, so the first terminal goes home and the next opens
+where you are — or *where launched*, which never moves a window and only gives
+it its slot when it is on the pinned workspace. Login and the open button still
+start the app on its workspace either way.
+
 A place can hold several apps and an app several places: aim a slot and click
 each app you want there, and whichever is open takes it. If you want both on
 screen at once, split the place in two instead.
@@ -432,6 +440,13 @@ terminal app is remembered:
   "workspace": "2", "slots": [1], "group": 4,
   "command": "chromium --user-data-dir=\"$HOME/.local/share/chromium-work\" --class=chromium-work"
 }
+```
+
+`"open": "first"` sends only the first window home and `"open": "here"` sends
+none (absent means `"always"`):
+
+```json
+"Alacritty": { "workspace": "1", "slots": [3], "open": "here" }
 ```
 
 The plugin waits for a valid config read or a confirmed first run before sync.

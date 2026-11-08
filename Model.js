@@ -1310,7 +1310,39 @@ function normalizePin(value) {
     pin.group = group
     pin.slots = slots.slice(0, 1)
   }
+  var open = normalizePinOpen(raw.open)
+  if (open !== "always") pin.open = open
   return pin
+}
+
+// Where a newly opened window of a pinned app goes.
+//
+// - `always`: every window is sent to the pinned workspace (the original
+//   behaviour, and the default, so existing documents do not change).
+// - `first`: only while the app has no window on its workspace yet. The first
+//   terminal goes home; the next one opens where you are.
+// - `here`: never sent anywhere. The window opens where it was launched and
+//   takes its slot only when it is on the pinned workspace. Login and the
+//   panel's open button still open it on the pinned workspace, because they
+//   launch it there rather than relying on the rule.
+var PIN_OPEN_MODES = ["always", "first", "here"]
+
+function normalizePinOpen(value) {
+  var text = String(value === undefined || value === null ? "" : value)
+  return PIN_OPEN_MODES.indexOf(text) === -1 ? "always" : text
+}
+
+function nextPinOpen(value) {
+  var at = PIN_OPEN_MODES.indexOf(normalizePinOpen(value))
+  return PIN_OPEN_MODES[(at + 1) % PIN_OPEN_MODES.length]
+}
+
+function pinOpenLabel(value, workspace) {
+  var label = workspaceLabel(workspace) || "its workspace"
+  var open = normalizePinOpen(value)
+  if (open === "first") return "First window to " + label + ", the rest where launched"
+  if (open === "here") return "Opens where launched"
+  return "Always opens on " + label
 }
 
 function pinEditorError(config, original, match, command, slots, group) {
@@ -1340,7 +1372,7 @@ function pinEditorError(config, original, match, command, slots, group) {
   return ""
 }
 
-function editedPin(config, original, match, workspace, slots, command, name, group) {
+function editedPin(config, original, match, workspace, slots, command, name, group, open) {
   var key = workspaceKey(workspace)
   if (key === null || pinEditorError(config, original, match, command, slots, group) !== "") return null
   var draft = normalizeConfig(config)
@@ -1352,6 +1384,7 @@ function editedPin(config, original, match, workspace, slots, command, name, gro
   pin.command = String(command || "").trim()
   pin.name = String(name || "").trim()
   pin.group = normalizeGroup(group)
+  if (open !== undefined) pin.open = normalizePinOpen(open)
   if (original && original !== clean) delete profile.pins[original]
   profile.pins[clean] = normalizePin(pin)
   return draft
@@ -1674,6 +1707,8 @@ function pinEntries(config) {
       command: pins[match].command || ""
     }
     if (pins[match].group) entry.group = pins[match].group
+    var open = normalizePinOpen(pins[match].open)
+    if (open !== "always") entry.open = open
     out.push(entry)
   }
   out.sort(function(a, b) { return a.match < b.match ? -1 : (a.match > b.match ? 1 : 0) })
@@ -2735,6 +2770,7 @@ var LUA_RUNTIME = [
   '-- Added after the first release: a compositor still running the older',
   '-- runtime has a W without this table, and reload must not lose its rules.',
   'W.app_rules = W.app_rules or {}',
+  'W.first = W.first or {}',
   'W.owned = W.owned or {}',
   'W.originals = W.originals or {}',
   'W.specs = {}',
@@ -3148,6 +3184,7 @@ var LUA_RUNTIME = [
   '    pcall(function() rule:set_enabled(false) end)',
   '  end',
   '  W.app_rules = {}',
+  '  W.first = {}',
   'end',
   '',
   '-- Window rules place apps silently. An explicit launch can focus its workspace first.',
@@ -3156,12 +3193,65 @@ var LUA_RUNTIME = [
   '  W.slots[ws][class] = slots',
   'end',
   '',
-  'function W.set_app(match, pattern, ws)',
-  '  W.app_rules[match] = hl.window_rule({',
+  '-- `open` says which new windows the rule sends: "always" every one, "first"',
+  '-- only while the app has no window on its workspace, "here" none — the',
+  '-- window stays where it was launched and keeps only its slot targeting.',
+  'function W.set_app(match, pattern, ws, open, classes)',
+  '  if open == "here" then return end',
+  '  local rule = hl.window_rule({',
   '    name = "omarchy-wsl-pin-" .. match,',
   '    match = { class = pattern },',
   '    workspace = ws .. " silent",',
   '  })',
+  '  W.app_rules[match] = rule',
+  '  if open == "first" and classes and #classes > 0 then',
+  '    W.first[match] = { rule = rule, ws = ws, classes = classes }',
+  '  end',
+  'end',
+  '',
+  'local function app_is_home(entry)',
+  '  for _, class in ipairs(entry.classes) do',
+  '    local ok, windows = pcall(function() return hl.get_windows({ class = class }) end)',
+  '    if ok and windows then',
+  '      for _, win in ipairs(windows) do',
+  '        local fine, workspace = pcall(function() return win.workspace end)',
+  '        if fine and workspace_key(workspace) == entry.ws then return true end',
+  '      end',
+  '    end',
+  '  end',
+  '  return false',
+  'end',
+  '',
+  '-- A "first" rule is on exactly while its app has no window at home.',
+  'function W.update_first()',
+  '  for _, entry in pairs(W.first) do',
+  '    local home = app_is_home(entry)',
+  '    pcall(function() entry.rule:set_enabled(not home) end)',
+  '  end',
+  'end',
+  '',
+  '-- Rechecked a tick after a window opens, closes or moves, once Hyprland has',
+  '-- finished placing (or forgetting) it.',
+  'function W.start_first()',
+  '  for _, subscription in ipairs(W.first_subscriptions or {}) do',
+  '    pcall(function() subscription:remove() end)',
+  '  end',
+  '  W.first_subscriptions = {}',
+  '  if next(W.first) and type(hl.on) == "function" then',
+  '    local function later()',
+  '      if type(hl.timer) == "function" then',
+  '        hl.timer(W.update_first, { type = "oneshot", timeout = 1 })',
+  '      else',
+  '        W.update_first()',
+  '      end',
+  '    end',
+  '    W.first_subscriptions = {',
+  '      hl.on("window.open", later),',
+  '      hl.on("window.destroy", later),',
+  '      hl.on("window.move_to_workspace", later),',
+  '    }',
+  '  end',
+  '  W.update_first()',
   'end',
   '',
   '-- Nothing re-tiles a workspace just because its spec changed, so ask the',
@@ -3305,8 +3395,15 @@ function generateLua(config, liveWorkspaceIds, workspaceMonitors) {
   lines.push("W.reset_apps()")
   var pins = pinEntries(normalized)
   for (i = 0; i < pins.length; i++) {
+    var routed = slotKeys(pins[i].match)
+    var tail = ""
+    if (pins[i].open) {
+      var listed = []
+      for (var r = 0; r < routed.length; r++) listed.push(luaString(routed[r]))
+      tail = ", " + luaString(pins[i].open) + ", { " + listed.join(", ") + " }"
+    }
     lines.push("W.set_app(" + luaString(pins[i].match) + ", " +
-      luaString(appPattern(pins[i].match)) + ", " + luaString(pins[i].workspace) + ")")
+      luaString(appPattern(pins[i].match)) + ", " + luaString(pins[i].workspace) + tail + ")")
     var groupClasses = slotKeys(pins[i].match)
     if (pins[i].group && groupClasses.length === 1) {
       lines.push("W.set_group(" + luaString(pins[i].workspace) + ", " + luaString(groupClasses[0]) + ")")
@@ -3323,6 +3420,7 @@ function generateLua(config, liveWorkspaceIds, workspaceMonitors) {
     }
   }
   lines.push("W.start_groups()")
+  lines.push("W.start_first()")
   lines.push("W.relayout()")
   lines.push("")
   return lines.join("\n")
@@ -3807,6 +3905,10 @@ if (typeof module !== "undefined") {
     followOmarchyToggles: followOmarchyToggles,
     normalizeAppMatch: normalizeAppMatch,
     normalizePin: normalizePin,
+    PIN_OPEN_MODES: PIN_OPEN_MODES,
+    normalizePinOpen: normalizePinOpen,
+    nextPinOpen: nextPinOpen,
+    pinOpenLabel: pinOpenLabel,
     normalizeGroup: normalizeGroup,
     MAX_GROUP_WINDOWS: MAX_GROUP_WINDOWS,
     MAX_COMMAND_LENGTH: MAX_COMMAND_LENGTH,

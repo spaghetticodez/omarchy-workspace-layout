@@ -892,6 +892,96 @@ test("the generated file installs a window rule per pin and clears the rest", ()
   assert.ok(!/^W\.set_app\(/m.test(cleared))
 })
 
+// The pin routing fix: a pinned terminal used to open on its workspace no
+// matter where it was launched, because every pin was a static
+// `workspace N silent` window rule.
+function pinRouteLua(config, windows) {
+  const rows = (windows || []).map((w) =>
+    `WINDOWS[#WINDOWS + 1] = { class = "${w.class}", workspace = { id = ${w.ws}, name = "${w.ws}" } }`)
+  return runLua([
+    lua_prelude(),
+    "WINDOWS = {}",
+    ...rows,
+    "SUBS = 0",
+    "hl.on = function() SUBS = SUBS + 1; return { remove = function() end } end",
+    "hl.get_windows = function(filter)",
+    "  local out = {}",
+    "  for _, w in ipairs(WINDOWS) do if not filter or not filter.class or w.class == filter.class then out[#out + 1] = w end end",
+    "  return out",
+    "end",
+    Model.generateLua(config, [1, 3]),
+    "for _, spec in ipairs(PINS) do",
+    "  print(spec.name .. ' ' .. spec.workspace .. ' ' .. tostring(spec.enabled))",
+    "end",
+    "print('subs ' .. SUBS)"
+  ].join("\n")).trim().split("\n")
+}
+
+test("a pin can open where it is launched, or send only its first window home",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    const config = Model.normalizeConfig({
+      profiles: [{
+        name: "default",
+        fallback: "dwindle",
+        pins: {
+          "brave-origin": { workspace: "1", slots: [1] },
+          Alacritty: { workspace: "1", slots: [3], open: "here" },
+          KeePassXC: { workspace: "1", slots: [2], open: "first" }
+        }
+      }]
+    })
+    const lua = Model.generateLua(config, [1])
+    assert.ok(lua.includes('W.set_app("brave-origin", "^(brave-origin)$", "1")'))
+    assert.ok(lua.includes('W.set_app("Alacritty", "^(Alacritty)$", "1", "here", { "Alacritty" })'))
+    assert.ok(lua.includes('W.set_app("KeePassXC", "^(KeePassXC)$", "1", "first", { "KeePassXC" })'))
+    // "here" keeps its slot on the pinned workspace.
+    assert.ok(lua.includes('W.set_slot("1", "Alacritty", { 3 })'))
+
+    // Nothing open: "always" and "first" both send the window home, "here" has no rule.
+    assert.deepEqual(pinRouteLua(config, []), [
+      "omarchy-wsl-pin-KeePassXC 1 silent true",
+      "omarchy-wsl-pin-brave-origin 1 silent nil",
+      "subs 3"
+    ])
+    // A KeePassXC already home turns its rule off, so the next one opens where launched.
+    assert.deepEqual(pinRouteLua(config, [{ class: "KeePassXC", ws: 1 }]), [
+      "omarchy-wsl-pin-KeePassXC 1 silent false",
+      "omarchy-wsl-pin-brave-origin 1 silent nil",
+      "subs 3"
+    ])
+    // One open on another workspace is not home.
+    assert.deepEqual(pinRouteLua(config, [{ class: "KeePassXC", ws: 3 }])[0],
+      "omarchy-wsl-pin-KeePassXC 1 silent true")
+  })
+
+test("pins without a routing choice keep sending every window home", () => {
+  const config = Model.normalizeConfig({
+    profiles: [{ name: "default", pins: { firefox: { workspace: "3" }, kitty: { workspace: "2", open: "bogus" } } }]
+  })
+  assert.equal(config.profiles[0].pins.firefox.open, undefined)
+  assert.equal(config.profiles[0].pins.kitty.open, undefined)
+  assert.equal(Model.normalizePin({ workspace: "2", open: "here" }).open, "here")
+  assert.equal(Model.nextPinOpen("always"), "first")
+  assert.equal(Model.nextPinOpen("first"), "here")
+  assert.equal(Model.nextPinOpen("here"), "always")
+  assert.equal(Model.pinOpenLabel("here", "1"), "Opens where launched")
+
+  // The editor's choice survives a save, and an edit that does not say keeps it.
+  const routed = Model.editedPin(config, "kitty", "kitty", "2", "", "kitty", "", "0", "here")
+  assert.equal(Model.activeProfile(routed).pins.kitty.open, "here")
+  const kept = Model.editedPin(routed, "kitty", "kitty", "2", "1", "kitty", "", "0")
+  assert.equal(Model.activeProfile(kept).pins.kitty.open, "here")
+})
+
+test("every pin writer carries the routing choice", () => {
+  const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+  const editor = fs.readFileSync(path.join(__dirname, "..", "AppPinEditor.qml"), "utf8")
+  assert.match(panel, /var open = changes\.open !== undefined \? changes\.open : previous\.open/)
+  assert.match(panel, /Model\.editedPin\(config, original, match, workspace, slots, command, name, group, open\)/)
+  assert.match(editor, /signal saved\([^)]*string open\)/)
+  assert.match(editor, /Model\.nextPinOpen\(root\.open\)/)
+})
+
 test("a following profile keeps background and unrelated windows silent", () => {
   const config = Model.normalizeConfig({
     profiles: [{

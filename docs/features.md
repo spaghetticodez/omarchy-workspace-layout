@@ -22,7 +22,8 @@ Everything the plugin does, in one list.
 - Save the whole arrangement as a profile and switch the lot when the work
   changes
 - Pin an app to a workspace so it opens there wherever you launch it from,
-  using a Hyprland window rule
+  using a Hyprland window rule — or only its first window, or none, so a
+  terminal opened on workspace 3 stays on workspace 3
 - Pin an app to a numbered place, or to several places at once
 - Or catch one: give a *layout* a place for an app, kept on every workspace
   running that shape, with nothing moved anywhere

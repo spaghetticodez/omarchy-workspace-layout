@@ -14,11 +14,12 @@ Column {
   property string original: ""
   property string workspace: ""
   property string error: ""
+  property string open: "always"
   readonly property bool editing: classInput.activeFocus || nameInput.activeFocus
     || commandInput.activeFocus || slotsInput.activeFocus || groupInput.activeFocus
-    || saveButton.activeFocus || cancelButton.activeFocus
+    || openButton.activeFocus || saveButton.activeFocus || cancelButton.activeFocus
 
-  signal saved(string original, string match, string workspace, string slots, string command, string name, string group)
+  signal saved(string original, string match, string workspace, string slots, string command, string name, string group, string open)
   signal cancelled()
 
   visible: opened
@@ -32,6 +33,7 @@ Column {
     commandInput.text = pin && pin.command ? pin.command : ""
     slotsInput.text = pin ? (pin.slots || []).join(", ") : (slot > 0 ? String(slot) : "")
     groupInput.text = String(pin && pin.group ? pin.group : 0)
+    open = Model.normalizePinOpen(pin ? pin.open : "")
     error = ""
     opened = true
     classInput.forceActiveFocus()
@@ -40,7 +42,7 @@ Column {
   function submit() {
     error = Model.pinEditorError(config, original, classInput.text, commandInput.text, slotsInput.text, groupInput.text)
     if (error !== "") return
-    saved(original, classInput.text.trim(), workspace, slotsInput.text, commandInput.text, nameInput.text, groupInput.text)
+    saved(original, classInput.text.trim(), workspace, slotsInput.text, commandInput.text, nameInput.text, groupInput.text, open)
   }
 
   function close() {
@@ -140,6 +142,26 @@ Column {
     inputMethodHints: Qt.ImhDigitsOnly
     Accessible.name: "Windows in one tab group"
     onAccepted: root.submit()
+  }
+
+  Text {
+    text: "New windows"
+    color: root.foreground
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+  }
+  // Cycles always -> first -> here. "Here" is the one for terminals: a pin
+  // still gives the app its slot on its own workspace, but a window opened on
+  // another workspace stays there.
+  Button {
+    id: openButton
+    focusable: true
+    text: Model.pinOpenLabel(root.open, root.workspace)
+    tooltipText: "Click to change where a newly opened window of this app goes"
+    foreground: root.foreground
+    accent: root.accent
+    bordered: true
+    onClicked: root.open = Model.nextPinOpen(root.open)
   }
 
   Text {
