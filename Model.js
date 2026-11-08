@@ -1585,6 +1585,18 @@ function parseOmarchyToggleFiles(text) {
   return out
 }
 
+// The press records a scan listed (`live:<name>`), whatever mode they name,
+// so the watcher can delete every one it has read.
+function liveRecordIds(text) {
+  var out = []
+  var records = String(text || "").split("\u001e")
+  for (var i = 0; i < records.length; i++) {
+    var match = /^live:(\d+-\d+)\u001f/.exec(records[i])
+    if (match && out.indexOf(match[1]) === -1) out.push(match[1])
+  }
+  return out
+}
+
 // Omarchy 4.5's `default.lua`: the layout of every workspace without a file
 // of its own, chosen under Appearance > Workspace Layout. Null for floating,
 // which this plugin cannot express as a fallback.
@@ -1605,6 +1617,19 @@ function parseOmarchyToggleSnapshot(text) {
     if (fields[0] === "default") {
       var fallback = fields[1] === "" ? null : parseOmarchyDefault(fields.slice(2).join("\u001f"))
       if (fallback !== null) out["default"] = { layout: fallback, stamp: fields[1] }
+      continue
+    }
+    // A press the plugin's Lua saw happen (see W.note_mode), named
+    // `live:<workspace>-<sequence>`. Its content says the mode chosen.
+    var live = /^live:(\d+)-(\d+)$/.exec(fields[0])
+    if (live) {
+      var pressed = normalizeWorkspaceId(live[1])
+      var said = pressed === null ? [] : parseOmarchyToggleFiles(fields.slice(2).join("\u001f"))
+      for (var p = 0; p < said.length; p++) {
+        if (said[p].workspace !== pressed) continue
+        out[fields[0]] = { layout: said[p].layout, stamp: live[2], workspace: pressed }
+        break
+      }
       continue
     }
     var key = normalizeWorkspaceId(fields[0])
@@ -1630,8 +1655,15 @@ function omarchyToggleChanges(previous, snapshot, liveIds) {
   var before = previous || {}
   var live = liveIds || {}
   var out = []
+  var presses = []
   for (var key in snapshot) {
     var record = snapshot[key]
+    if (key.indexOf("live:") === 0) {
+      // A press is a choice made just now, whatever the workspace runs, and
+      // it is seen once: the watcher deletes the record after reading it.
+      if (!before[key]) presses.push(record)
+      continue
+    }
     if (!first && !live[key] && before[key]
       && before[key].stamp === record.stamp && before[key].layout === record.layout) continue
     out.push({ workspace: key, layout: record.layout, onlyBuiltins: first && !live[key] })
@@ -1643,9 +1675,14 @@ function omarchyToggleChanges(previous, snapshot, liveIds) {
   // was never there, so only a running watcher reports one.
   if (!first) {
     for (key in before) {
-      if (snapshot[key] || key === "default") continue
+      if (snapshot[key] || key === "default" || key.indexOf("live:") === 0) continue
       out.push({ workspace: key, layout: null, removed: before[key].layout })
     }
+  }
+  // Presses last and in the order they happened, so the newest one wins.
+  presses.sort(function(a, b) { return Number(a.stamp) - Number(b.stamp) })
+  for (var i = 0; i < presses.length; i++) {
+    out.push({ workspace: presses[i].workspace, layout: presses[i].layout, onlyBuiltins: false })
   }
   return out
 }
@@ -3332,6 +3369,55 @@ var LUA_RUNTIME = [
   '  hide()',
   'end',
   '',
+  '-- Omarchy 4.5\'s Super+L applies a mode with `hyprctl eval o.workspace_mode`',
+  '-- and then writes, or deletes, ~/.local/state/omarchy/workspace-layouts/N.lua.',
+  '-- Cycling onto the default deletes a file that a workspace running one of',
+  '-- these layouts never had, so the watcher sees nothing and the next sync',
+  '-- puts the old layout back. Each live call is therefore also recorded under',
+  '-- $XDG_RUNTIME_DIR/omarchy-workspace-layout/modes for the watcher. A call',
+  '-- that only replays its saved file (config reload) is not a press: the',
+  '-- toggle always picks a different mode from the one saved.',
+  'local function saved_mode(ws)',
+  '  local state = os.getenv("XDG_STATE_HOME")',
+  '  if not state or state == "" then state = (os.getenv("HOME") or "") .. "/.local/state" end',
+  '  local file = io.open(state .. "/omarchy/workspace-layouts/" .. ws .. ".lua", "r")',
+  '  if not file then return nil end',
+  '  local text = file:read("a") or ""',
+  '  file:close()',
+  '  return text:match(\'mode%s*=%s*"(%a+)"\')',
+  'end',
+  '',
+  'function W.note_mode(spec)',
+  '  if type(spec) ~= "table" or spec.workspace == nil or type(spec.mode) ~= "string" then return end',
+  '  local ws = tostring(spec.workspace)',
+  '  if not ws:match("^%d+$") or not spec.mode:match("^%a+$") then return end',
+  '  if saved_mode(ws) == spec.mode then return end',
+  '  local runtime = os.getenv("XDG_RUNTIME_DIR")',
+  '  if not runtime or runtime == "" then return end',
+  '  W.mode_seq = ((W.mode_seq or 0) + 1) % 10000',
+  '  local name = string.format("%s/omarchy-workspace-layout/modes/%s-%d%04d.lua",',
+  '    runtime, ws, os.time(), W.mode_seq)',
+  '  local file = io.open(name, "w")',
+  '  if not file then return end',
+  '  file:write(string.format(\'o.workspace_mode({ workspace = "%s", mode = "%s" })\\n\', ws, spec.mode))',
+  '  file:close()',
+  'end',
+  '',
+  '-- Wrapped once for the life of the Lua state; a reload that redefines',
+  '-- o.workspace_mode is wrapped again. The wrapper looks W.* up on every call,',
+  '-- so a newer generated file changes what it does without rewrapping.',
+  'function W.follow_modes()',
+  '  if type(o) ~= "table" or type(o.workspace_mode) ~= "function" then return end',
+  '  if o.workspace_mode == W.mode_wrapper then return end',
+  '  W.mode_original = o.workspace_mode',
+  '  W.mode_wrapper = function(spec)',
+  '    local result = table.pack(W.mode_original(spec))',
+  '    pcall(W.note_mode, spec)',
+  '    return table.unpack(result, 1, result.n)',
+  '  end',
+  '  o.workspace_mode = W.mode_wrapper',
+  'end',
+  '',
   '-- Nothing re-tiles a workspace just because its spec changed, so ask the',
   '-- active layout to lay itself out again. Errors on a workspace running a',
   '-- built-in layout, which has no idea what this message means.',
@@ -3501,6 +3587,7 @@ function generateLua(config, liveWorkspaceIds, workspaceMonitors) {
   lines.push("W.start_first()")
   lines.push("W.focus_border(" + luaString(normalized.focusBorder) + ", " +
     luaNumber(normalized.focusBorderMs) + ")")
+  lines.push("W.follow_modes()")
   lines.push("W.relayout()")
   lines.push("")
   return lines.join("\n")
@@ -3981,6 +4068,7 @@ if (typeof module !== "undefined") {
     parseOmarchyToggleFiles: parseOmarchyToggleFiles,
     parseOmarchyToggleSnapshot: parseOmarchyToggleSnapshot,
     parseOmarchyDefault: parseOmarchyDefault,
+    liveRecordIds: liveRecordIds,
     omarchyToggleChanges: omarchyToggleChanges,
     followOmarchyToggles: followOmarchyToggles,
     normalizeAppMatch: normalizeAppMatch,

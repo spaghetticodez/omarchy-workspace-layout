@@ -41,8 +41,9 @@ save the arrangement as a profile. The full manual is in
   files that the plugin could not read, so every Hyprland reload put dwindle
   back over your Super+L choice and over the default layout chosen in
   Appearance. Both formats are read now, the 4.5 default layout is followed,
-  a workspace cycled back to the default follows it, and floating is left to
-  Omarchy.
+  a workspace cycled back to the default follows it, a Super+L press on a
+  workspace running one of the plugin's layouts sticks instead of being undone
+  at the next sync, and floating is left to Omarchy.
 - **Borders that only show when focus moves.** Optional (`borders → flash on
   focus` at the foot of the panel): all borders stay transparent and the
   active one shows in your theme's colour for two seconds after a focus

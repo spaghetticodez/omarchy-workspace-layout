@@ -2598,6 +2598,110 @@ test("a Super+L file Omarchy deletes hands the workspace back to the default", (
   assert.deepEqual(Model.omarchyToggleChanges(null, {}, {}), [])
 })
 
+// The 4.5 path the file watcher cannot see: Super+L on a workspace running a
+// plugin layout reads `lua:omarchy-wsl-*`, picks the default (dwindle), and
+// `rm -f`s a file that never existed. The generated Lua records the press.
+function modeTempDirs() {
+  const os = require("node:os")
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), "wsl-modes-"))
+  const state = path.join(root, "state")
+  const run = path.join(root, "run")
+  fs.mkdirSync(path.join(state, "omarchy", "workspace-layouts"), { recursive: true })
+  fs.mkdirSync(path.join(run, "omarchy-workspace-layout", "modes"), { recursive: true })
+  return {
+    root, state, run,
+    saved: path.join(state, "omarchy", "workspace-layouts"),
+    live: path.join(run, "omarchy-workspace-layout", "modes"),
+    env: { ...process.env, XDG_STATE_HOME: state, XDG_RUNTIME_DIR: run }
+  }
+}
+
+test("the generated Lua records a live Super+L press, never a replayed file",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    const dirs = modeTempDirs()
+    try {
+      fs.writeFileSync(path.join(dirs.saved, "4.lua"), 'o.workspace_mode({ workspace = "4", mode = "scrolling" })\n')
+      const config = Model.normalizeConfig({
+        layouts: [{ id: "focus", name: "Focus", weights: [25, 50, 25] }],
+        profiles: [{ name: "default", fallback: "dwindle", assignments: { 1: "focus" } }]
+      })
+      const lua = Model.generateLua(config, [1])
+      const source = [
+        lua_prelude(),
+        "CALLS = 0",
+        "o = { workspace_mode = function(spec) CALLS = CALLS + 1; return 'applied' end }",
+        lua,
+        // A config reload re-runs the file: still one wrapper around the original.
+        lua,
+        "local r = o.workspace_mode({ workspace = '1', mode = 'dwindle' })",      // live: no file
+        "o.workspace_mode({ workspace = '4', mode = 'scrolling' })",              // replay of 4.lua
+        "o.workspace_mode({ default = 'scrolling' })",                            // default.lua
+        "o.workspace_mode({ workspace = '1; rm -rf ~', mode = 'dwindle' })",      // not a workspace
+        "print('calls ' .. CALLS .. ' ' .. r)"
+      ].join("\n")
+      const result = childProcess.spawnSync("lua", ["-"], { input: source, encoding: "utf8", env: dirs.env })
+      assert.equal(result.status, 0, result.stderr)
+      assert.equal(result.stdout.trim(), "calls 4 applied")
+      const files = fs.readdirSync(dirs.live)
+      assert.equal(files.length, 1, files.join(","))
+      assert.match(files[0], /^1-\d+\.lua$/)
+      assert.equal(fs.readFileSync(path.join(dirs.live, files[0]), "utf8"),
+        'o.workspace_mode({ workspace = "1", mode = "dwindle" })\n')
+    } finally {
+      fs.rmSync(dirs.root, { recursive: true, force: true })
+    }
+  })
+
+test("a recorded press moves a plugin-layout workspace to the mode chosen", () => {
+  const config = Model.normalizeConfig({
+    layouts: [{ id: "focus", name: "Focus", weights: [25, 50, 25] }],
+    profiles: [{ name: "default", fallback: "dwindle", assignments: { 1: "focus", 2: "focus" } }]
+  })
+  const text = toggleRecord("live:1-17310000000001", "-", 'o.workspace_mode({ workspace = "1", mode = "dwindle" })') +
+    toggleRecord("live:1-17310000000002", "-", 'o.workspace_mode({ workspace = "1", mode = "scrolling" })') +
+    toggleRecord("live:2-17310000000003", "-", 'o.workspace_mode({ workspace = "2", mode = "floating" })') +
+    toggleRecord("live:2-1", "-", 'o.workspace_mode({ workspace = "3", mode = "dwindle" })')
+  assert.deepEqual(Model.liveRecordIds(text), ["1-17310000000001", "1-17310000000002", "2-17310000000003", "2-1"])
+  const snap = Model.parseOmarchyToggleSnapshot(text)
+  // Even on the first scan a press is a choice; the newest press wins.
+  const changes = Model.omarchyToggleChanges(null, snap, {})
+  assert.deepEqual(changes, [
+    { workspace: "1", layout: "dwindle", onlyBuiltins: false },
+    { workspace: "1", layout: "scrolling", onlyBuiltins: false }
+  ])
+  const next = Model.followOmarchyToggles(config, changes)
+  assert.equal(next.profiles[0].assignments["1"], "scrolling")
+  // Floating is Omarchy's, and a record naming another workspace is ignored.
+  assert.equal(next.profiles[0].assignments["2"], "focus")
+  // Seen once: the same records in the next scan change nothing, and their
+  // deletion is not a workspace handed back to the default.
+  assert.deepEqual(Model.omarchyToggleChanges(snap, snap, {}), [])
+  assert.deepEqual(Model.omarchyToggleChanges(snap, {}, {}), [])
+})
+
+test("the watcher scans recorded presses beside the Super+L files", () => {
+  const qml = fs.readFileSync(path.join(__dirname, "..", "OmarchyToggleFollow.qml"), "utf8")
+  const block = /id: scanProcess[\s\S]*?command: (\["sh", "-c",[\s\S]*?root\.liveDir\])/.exec(qml)
+  assert.ok(block, "scan command not found")
+  const dirs = modeTempDirs()
+  try {
+    // eslint-disable-next-line no-new-func
+    const command = new Function("root", "return " + block[1])({ dir: dirs.saved, liveDir: dirs.live })
+    fs.writeFileSync(path.join(dirs.saved, "3.lua"), 'o.workspace_mode({ workspace = "3", mode = "scrolling" })\n')
+    fs.writeFileSync(path.join(dirs.live, "1-17310000000001.lua"), 'o.workspace_mode({ workspace = "1", mode = "dwindle" })\n')
+    fs.writeFileSync(path.join(dirs.live, "bad name.lua"), 'o.workspace_mode({ workspace = "1", mode = "scrolling" })\n')
+    const run = childProcess.spawnSync(command[0], command.slice(1), { encoding: "utf8" })
+    assert.equal(run.status, 0, run.stderr)
+    const snap = Model.parseOmarchyToggleSnapshot(run.stdout)
+    assert.deepEqual(Object.keys(snap).sort(), ["3", "live:1-17310000000001"])
+    assert.equal(snap["live:1-17310000000001"].layout, "dwindle")
+    assert.deepEqual(Model.liveRecordIds(run.stdout), ["1-17310000000001"])
+    assert.match(qml, /consume\(Model\.liveRecordIds\(text\)\)/)
+  } finally {
+    fs.rmSync(dirs.root, { recursive: true, force: true })
+  }
+})
+
 // ----------------------------------------------------------------- loader
 
 test("the Hyprland loader line is added once and only once", () => {
