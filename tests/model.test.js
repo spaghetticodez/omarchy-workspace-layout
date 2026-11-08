@@ -982,6 +982,98 @@ test("every pin writer carries the routing choice", () => {
   assert.match(editor, /Model\.nextPinOpen\(root\.open\)/)
 })
 
+// ------------------------------------------------------------ focus border
+
+function borderLua(config, steps) {
+  return runLua([
+    lua_prelude(),
+    "LOG = {}",
+    "CONFIG = { active = { colors = { '0xFF7AA2F7' }, angle = 0 }, inactive = { colors = { '0xAA595959' }, angle = 0 } }",
+    "HANDLERS = {}",
+    "TIMERS = {}",
+    "local function show(v) if type(v) == 'table' then return v.colors[1] end return tostring(v) end",
+    "hl.get_config = function(key)",
+    "  if key == 'general.col.active_border' then return CONFIG.active end",
+    "  if key == 'general.col.inactive_border' then return CONFIG.inactive end",
+    "end",
+    "hl.config = function(spec)",
+    "  local col = spec.general and spec.general.col or {}",
+    "  if spec.general and spec.general.border_size then LOG[#LOG + 1] = 'border_size' end",
+    "  local parts = {}",
+    "  if col.active_border then parts[#parts + 1] = 'active=' .. show(col.active_border) end",
+    "  if col.inactive_border then parts[#parts + 1] = 'inactive=' .. show(col.inactive_border) end",
+    "  LOG[#LOG + 1] = table.concat(parts, ' ')",
+    "end",
+    "hl.on = function(name, fn) HANDLERS[name] = fn; return { remove = function() HANDLERS[name] = nil end } end",
+    "hl.timer = function(fn, opts) local t = { fn = fn, ms = opts.timeout, on = true }",
+    "  t.set_enabled = function(self, v) self.on = v end; TIMERS[#TIMERS + 1] = t; return t end",
+    Model.generateLua(config, [1]),
+    ...(steps || []),
+    "print(table.concat(LOG, '\\n'))"
+  ].join("\n")).trim().split("\n").filter((line) => line !== "")
+}
+
+test("flashing borders hide by colour and show the theme's colour on focus",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    const config = Model.normalizeConfig({ focusBorder: "flash", focusBorderMs: 1500 })
+    assert.match(Model.generateLua(config, [1]), /^W\.focus_border\("flash", 1500\)$/m)
+    const log = borderLua(config, [
+      "HANDLERS['window.active']()",
+      "print('timer ' .. TIMERS[1].ms)",
+      "TIMERS[1].fn()",
+      // Focus moves again before the timer fires: the old timer is cancelled.
+      "HANDLERS['window.active']()",
+      "HANDLERS['window.active']()",
+      "print('cancelled ' .. tostring(TIMERS[2].on))"
+    ])
+    assert.deepEqual(log, [
+      "timer 1500",
+      "cancelled false",
+      "active=rgba(00000000) inactive=rgba(00000000)",
+      "active=0xFF7AA2F7",
+      "active=rgba(00000000) inactive=rgba(00000000)",
+      "active=0xFF7AA2F7",
+      "active=0xFF7AA2F7"
+    ])
+    // Resizing windows twice per focus change is what the old looknfeel hack did.
+    assert.ok(!log.includes("border_size"))
+  })
+
+test("turning flashing off hands the theme its colours back",
+  { skip: luaAvailable ? false : "lua interpreter not installed" }, () => {
+    const on = Model.normalizeConfig({ focusBorder: "flash" })
+    const off = Model.normalizeConfig({})
+    assert.equal(off.focusBorder, "always")
+    assert.equal(off.focusBorderMs, 2000)
+    const log = borderLua(on, [
+      // Hyprland now reports our transparency; a live re-run must not capture it.
+      "CONFIG.active = { colors = { '0x00000000' } }",
+      "CONFIG.inactive = { colors = { '0x00000000' } }",
+      Model.generateLua(off, [1]),
+      "print('handler ' .. tostring(HANDLERS['window.active'] ~= nil))"
+    ])
+    assert.deepEqual(log, [
+      "handler false",
+      "active=rgba(00000000) inactive=rgba(00000000)",
+      "active=0xFF7AA2F7 inactive=0xAA595959"
+    ])
+    // Never flashing, never touched: a default install changes no colour.
+    assert.deepEqual(borderLua(off, []), [])
+  })
+
+test("the border setting is clamped and survives normalization", () => {
+  assert.equal(Model.normalizeFocusBorderMs(50), 300)
+  assert.equal(Model.normalizeFocusBorderMs(99999), 10000)
+  assert.equal(Model.normalizeFocusBorderMs("x"), 2000)
+  assert.equal(Model.normalizeFocusBorder("bogus"), "always")
+  const kept = Model.normalizeConfig(Model.normalizeConfig({ focusBorder: "flash", focusBorderMs: 2500 }))
+  assert.equal(kept.focusBorder, "flash")
+  assert.equal(kept.focusBorderMs, 2500)
+  const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+  assert.match(panel, /function toggleFocusBorder\(\)/)
+  assert.match(panel, /onClicked: root\.toggleFocusBorder\(\)/)
+})
+
 test("a following profile keeps background and unrelated windows silent", () => {
   const config = Model.normalizeConfig({
     profiles: [{

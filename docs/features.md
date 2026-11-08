@@ -70,6 +70,8 @@ Everything the plugin does, in one list.
 - The panel scrolls when it grows taller than the screen
 - Restore defaults puts back the shipped layouts, one profile, and every
   workspace on Hyprland's own tiling
+- Hide window borders and flash the active one for a moment when focus moves,
+  by colour only, so nothing is resized
 - Sixteen command-line commands: status, workspace, json, profiles, apply,
   layouts, set, reset, pin, unpin, capture, launch, open, close, show, hide,
   toggle

@@ -352,6 +352,15 @@ pinned to the place it was in.
 per-workspace exception. Switch and every workspace re-tiles at once. `＋` copies
 the current profile under a new name.
 
+**Borders that only show when focus moves.** `borders → always` at the foot of
+the panel switches to `borders → flash on focus`: every window border turns
+transparent and the active one shows in the theme's colour for two seconds
+(`"focusBorderMs"` in the JSON, 300 to 10000) whenever focus moves, then fades
+out. Meant for OLED panels, where a border that never moves burns in. Only the
+colours change — `border_size` is left alone, so no window is resized on a
+focus change — which also means the border needs a non-zero `border_size` to
+be seen. A theme change is picked up on the reload it causes.
+
 **Restore defaults** at the foot of the panel is the way back from an experiment
 that went sideways: the shipped layouts, one profile, every workspace handed
 back to Hyprland's own tiling. It takes two presses, and `Esc` cancels a primed

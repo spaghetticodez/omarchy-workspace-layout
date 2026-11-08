@@ -1020,9 +1020,27 @@ function normalizeConfig(raw) {
     version: 1,
     activeProfile: active,
     bindings: input.bindings === true,
+    focusBorder: normalizeFocusBorder(input.focusBorder),
+    focusBorderMs: normalizeFocusBorderMs(input.focusBorderMs),
     profiles: profiles,
     layouts: layouts
   }
+}
+
+// Window borders. `always` leaves Hyprland's colours alone. `flash` keeps
+// every border transparent and shows the theme's active colour for a moment
+// when focus moves — for OLED panels, where a border that never moves burns
+// in. Only colours change, never `border_size`, so no window is resized.
+var FOCUS_BORDER_MS = 2000
+
+function normalizeFocusBorder(value) {
+  return value === "flash" ? "flash" : "always"
+}
+
+function normalizeFocusBorderMs(value) {
+  var ms = Math.round(Number(value))
+  if (!isFiniteNumber(ms)) return FOCUS_BORDER_MS
+  return Math.min(10000, Math.max(300, ms))
 }
 
 function normalizeProfile(raw, layouts) {
@@ -3254,6 +3272,66 @@ var LUA_RUNTIME = [
   '  W.update_first()',
   'end',
   '',
+  '-- Window borders: "flash" keeps them transparent and shows the active colour',
+  '-- for `ms` after focus moves. The theme\'s colours are read back from Hyprland',
+  '-- on every load, skipping a value that is our own transparency, so a theme',
+  '-- change (which reloads the config) is picked up and a live re-run while',
+  '-- hidden does not mistake transparent for the theme.',
+  'local BORDER_HIDDEN = "rgba(00000000)"',
+  '',
+  'local function invisible(value)',
+  '  if type(value) ~= "table" or type(value.colors) ~= "table" or #value.colors == 0 then',
+  '    return false',
+  '  end',
+  '  for _, color in ipairs(value.colors) do',
+  '    local n = tonumber(color)',
+  '    if not n or math.floor(n / 16777216) % 256 ~= 0 then return false end',
+  '  end',
+  '  return true',
+  'end',
+  '',
+  'local function stop_border()',
+  '  for _, subscription in ipairs(W.border_subscriptions or {}) do',
+  '    pcall(function() subscription:remove() end)',
+  '  end',
+  '  W.border_subscriptions = {}',
+  '  if W.border_timer then pcall(function() W.border_timer:set_enabled(false) end) end',
+  '  W.border_timer = nil',
+  'end',
+  '',
+  'function W.focus_border(mode, ms)',
+  '  stop_border()',
+  '  local ok, active = pcall(function() return hl.get_config("general.col.active_border") end)',
+  '  local fine, inactive = pcall(function() return hl.get_config("general.col.inactive_border") end)',
+  '  if ok and active and not invisible(active) then W.border_active = active end',
+  '  if fine and inactive and not invisible(inactive) then W.border_inactive = inactive end',
+  '  if mode ~= "flash" then',
+  '    -- Switched off while running: hand the theme its colours back.',
+  '    if W.border_hidden then',
+  '      local col = {}',
+  '      if W.border_active then col.active_border = W.border_active end',
+  '      if W.border_inactive then col.inactive_border = W.border_inactive end',
+  '      if next(col) then pcall(function() hl.config({ general = { col = col } }) end) end',
+  '    end',
+  '    W.border_hidden = false',
+  '    return',
+  '  end',
+  '  if not W.border_active or type(hl.on) ~= "function" or type(hl.timer) ~= "function" then',
+  '    return',
+  '  end',
+  '  local function hide()',
+  '    hl.config({ general = { col = { active_border = BORDER_HIDDEN, inactive_border = BORDER_HIDDEN } } })',
+  '  end',
+  '  local function flash()',
+  '    if W.border_timer then pcall(function() W.border_timer:set_enabled(false) end) end',
+  '    hl.config({ general = { col = { active_border = W.border_active } } })',
+  '    W.border_timer = hl.timer(hide, { timeout = ms, type = "oneshot" })',
+  '  end',
+  '  W.border_hidden = true',
+  '  W.border_subscriptions = { hl.on("window.active", flash) }',
+  '  hide()',
+  'end',
+  '',
   '-- Nothing re-tiles a workspace just because its spec changed, so ask the',
   '-- active layout to lay itself out again. Errors on a workspace running a',
   '-- built-in layout, which has no idea what this message means.',
@@ -3421,6 +3499,8 @@ function generateLua(config, liveWorkspaceIds, workspaceMonitors) {
   }
   lines.push("W.start_groups()")
   lines.push("W.start_first()")
+  lines.push("W.focus_border(" + luaString(normalized.focusBorder) + ", " +
+    luaNumber(normalized.focusBorderMs) + ")")
   lines.push("W.relayout()")
   lines.push("")
   return lines.join("\n")
@@ -3905,6 +3985,8 @@ if (typeof module !== "undefined") {
     followOmarchyToggles: followOmarchyToggles,
     normalizeAppMatch: normalizeAppMatch,
     normalizePin: normalizePin,
+    normalizeFocusBorder: normalizeFocusBorder,
+    normalizeFocusBorderMs: normalizeFocusBorderMs,
     PIN_OPEN_MODES: PIN_OPEN_MODES,
     normalizePinOpen: normalizePinOpen,
     nextPinOpen: nextPinOpen,

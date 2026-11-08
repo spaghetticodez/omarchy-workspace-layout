@@ -870,6 +870,14 @@ Panel {
     })
   }
 
+  // Borders that show only when focus moves. A look, not a layout, so it
+  // lives on the document rather than on a profile.
+  function toggleFocusBorder() {
+    store.mutate(function(draft) {
+      draft.focusBorder = draft.focusBorder === "flash" ? "always" : "flash"
+    })
+  }
+
   // Won the claim: read what is on screen right now — the poll only runs while
   // the panel is open, and at login it never has been — and furnish from that.
   function beginAutostart() {
@@ -2950,6 +2958,23 @@ Panel {
           Item {
             width: parent.width
             height: restoreButton.implicitHeight
+
+            Button {
+              id: borderButton
+              readonly property bool flashing: !!root.config && root.config.focusBorder === "flash"
+              anchors.left: parent.left
+              foreground: borderButton.flashing ? root.fg : Util.alpha(root.fg, 0.55)
+              accent: root.accent
+              bordered: borderButton.flashing
+              fontSize: Style.font.caption
+              verticalPadding: Style.spacing.xs
+              text: borderButton.flashing ? "borders \u2192 flash on focus" : "borders \u2192 always"
+              tooltipText: borderButton.flashing
+                ? "Borders stay hidden and the active one shows for " +
+                  (root.config.focusBorderMs / 1000) + " s when focus moves. Click to always show them."
+                : "Hide window borders and show the active one only for a moment when focus moves (kind to OLED panels)"
+              onClicked: root.toggleFocusBorder()
+            }
 
             // Right-aligned and quiet: it undoes everything in the panel above
             // it, so it should be findable without inviting a stray click. Two
