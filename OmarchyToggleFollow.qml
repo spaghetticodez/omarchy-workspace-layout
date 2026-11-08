@@ -15,6 +15,7 @@ Item {
   property var pendingLive: ({})
   property var scanLive: ({})
   property bool scanAgain: false
+  property bool dirReady: false
 
   signal followed(var document)
 
@@ -59,7 +60,7 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0) return
       dirWatch.reload()
-      watchProcess.running = true
+      root.dirReady = true
       scanTimer.restart()
     }
   }
@@ -72,8 +73,11 @@ Item {
     onFileChanged: scanTimer.restart()
   }
 
+  // Only while this copy is the one following: an inactive copy (the panel,
+  // while the service runs) must not keep a second inotifywait alive.
   Process {
     id: watchProcess
+    running: root.dirReady && root.active
     command: ["inotifywait", "-m", "-q",
       "-e", "close_write", "-e", "create", "-e", "moved_to", "--format", "%f", root.dir]
     stdout: SplitParser {

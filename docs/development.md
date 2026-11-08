@@ -18,7 +18,8 @@ documentation — read it yourself, or point a tool at it explicitly.
 | `HyprlandSync.qml` | Read live workspaces, apply the latest config, then run queued app actions and workspace swaps. Preview has a separate queue. |
 | `AppPinEditor.qml` | Edit a pin's class, command, name, slots, and tab-group count. |
 | `Panel.qml` | The UI. Owns its own store and sync — see below. |
-| `Service.qml` | Optional background sync for a bar-less install. |
+| `Service.qml` | Background sync. Omarchy 4.x mounts it beside the bar widget; while it runs it owns the Super+L watcher and re-applying disk changes. |
+| `Shared.js` | `.pragma library` state every copy shares: whether a service runs, and Super+L files the plugin deleted itself. |
 | `docs/development.md` | This file: how the pieces fit and what will bite you. |
 
 ## Two things that will bite you

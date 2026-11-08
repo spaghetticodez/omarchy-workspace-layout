@@ -2472,6 +2472,41 @@ test("the panel and the service follow Omarchy's Super+L files", () => {
   assert.match(service, /OmarchyToggleFollow/)
 })
 
+test("one copy owns the background sync when the service runs beside the panel (#14)", () => {
+  const read = (name) => fs.readFileSync(path.join(__dirname, "..", name), "utf8")
+  const panel = read("Panel.qml")
+  const service = read("Service.qml")
+  const follow = read("OmarchyToggleFollow.qml")
+  const shared = read("Shared.js")
+  // Shared between every importer in the shell, unlike Model.js.
+  assert.match(shared, /^\.pragma library$/m)
+  assert.match(service, /Shared\.serviceStarted\(\)/)
+  assert.match(service, /Component\.onDestruction: Shared\.serviceStopped\(\)/)
+  assert.match(panel, /root\.serviceRunning = Shared\.serviceRunning\(\)/)
+  // The panel's watcher and its re-apply on disk changes stand down...
+  assert.match(panel, /active: store\.ready && sync\.workspacesReady && !sync\.swapping && !root\.serviceRunning/)
+  assert.match(panel, /onRevisionChanged: if \(!root\.serviceRunning\) syncTimer\.restart\(\)/)
+  // ...and an inactive watcher keeps no inotifywait of its own.
+  assert.match(follow, /running: root\.dirReady && root\.active/)
+  assert.doesNotMatch(follow, /watchProcess\.running = true/)
+
+  // The counter itself, evaluated without the QML-only pragma line.
+  const lib = {}
+  new Function("exports", shared.replace(/^\.pragma library$/m, "") +
+    "\nexports.start = serviceStarted; exports.stop = serviceStopped; exports.running = serviceRunning;" +
+    "\nexports.forget = forget; exports.wasForgotten = wasForgotten;")(lib)
+  assert.equal(lib.running(), false)
+  lib.start()
+  assert.equal(lib.running(), true)
+  lib.stop()
+  lib.stop()
+  assert.equal(lib.running(), false)
+  lib.forget("3")
+  assert.equal(lib.wasForgotten("3"), true)
+  assert.equal(lib.wasForgotten("3", Date.now() + 20000), false)
+  assert.equal(lib.wasForgotten("4"), false)
+})
+
 // Omarchy 4.5 rewrote Super+L: `o.workspace_mode({ workspace, mode })` instead
 // of a workspace rule, a `default.lua` for every workspace without a file,
 // a floating mode, and deletion of the file when a workspace cycles back

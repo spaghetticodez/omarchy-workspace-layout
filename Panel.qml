@@ -7,6 +7,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
+import "Shared.js" as Shared
 
 Panel {
   id: root
@@ -1564,18 +1565,34 @@ Panel {
 
   // ------------------------------------------------------------------ model
 
+  // Whether the plugin's service is mounted beside this panel. It then owns
+  // the background work — the Super+L watcher and re-applying the document
+  // after a change on disk — and this copy keeps only what the user does in
+  // it. Read from Shared.js, which is plain JS and not reactive, so it is
+  // polled; the read costs nothing and starts no process.
+  property bool serviceRunning: false
+
+  Timer {
+    interval: 2000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: root.serviceRunning = Shared.serviceRunning()
+  }
+
   ConfigStore {
     id: store
     // A hand-edit of the JSON, or a profile switch from another monitor's copy
-    // of this panel, arrives here as a revision bump.
-    onRevisionChanged: syncTimer.restart()
+    // of this panel, arrives here as a revision bump. The service re-applies
+    // it too, when it runs, and once is enough.
+    onRevisionChanged: if (!root.serviceRunning) syncTimer.restart()
   }
 
   OmarchyToggleFollow {
     id: toggles
     config: store.config
     workspaceMonitors: sync.liveWorkspaceMonitors
-    active: store.ready && sync.workspacesReady && !sync.swapping
+    active: store.ready && sync.workspacesReady && !sync.swapping && !root.serviceRunning
     onFollowed: function(document) { store.save(document) }
   }
 
@@ -1599,7 +1616,7 @@ Panel {
   }
 
   // A workspace moved to another screen may resolve to a different layout.
-  onWorkspaceMonitorsChanged: if (store.ready) syncTimer.restart()
+  onWorkspaceMonitorsChanged: if (store.ready && !root.serviceRunning) syncTimer.restart()
 
   Component.onCompleted: {
     sync.ensureLoader()

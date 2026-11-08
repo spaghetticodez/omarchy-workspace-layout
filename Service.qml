@@ -2,16 +2,17 @@ import QtQuick
 import Quickshell
 import Quickshell.Hyprland
 import "Model.js" as Model
+import "Shared.js" as Shared
 
-// Optional background sync, for running the plugin without its bar widget.
+// Background sync: follows Super+L files and applies every config change.
 //
-// `omarchy plugin enable` places a bar widget in the bar; mounting a service
-// means an entry in shell.json's top-level `plugins[]`. A plugin that declares
-// both, enabled the usual way, gets the widget and not the service — so the
-// panel does its own syncing and never depends on this file existing.
+// Omarchy 4.x mounts this for every enabled plugin that declares a service,
+// so it normally runs beside the bar widget. While it does, it owns the
+// background work and the panel does only what the user does in it (see
+// Shared.js). On a shell that does not mount it, the panel syncs by itself.
 //
-// Adding "bjarneo.workspace-layout" to `plugins[]` mounts this instead, which
-// keeps layouts applied for someone who drives the plugin purely by editing
+// Adding "bjarneo.workspace-layout" to shell.json's `plugins[]` is how to keep
+// layouts applied for someone who drives the plugin purely by editing
 // ~/.config/omarchy/workspace-layout.json and never puts it in their bar.
 Item {
   id: root
@@ -80,5 +81,9 @@ Item {
   onWorkspaceIdsChanged: if (store.ready) syncTimer.restart()
   onWorkspaceMonitorsChanged: if (store.ready) syncTimer.restart()
 
-  Component.onCompleted: sync.ensureLoader()
+  Component.onCompleted: {
+    Shared.serviceStarted()
+    sync.ensureLoader()
+  }
+  Component.onDestruction: Shared.serviceStopped()
 }

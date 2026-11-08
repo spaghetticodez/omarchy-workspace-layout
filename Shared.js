@@ -25,3 +25,22 @@ function wasForgotten(key, now) {
   }
   return true
 }
+
+// Mounted copies of Service.qml. Omarchy 4.x mounts the service for every
+// enabled plugin that declares one, bar widget or not, so the panel and the
+// service both ran the Super+L watcher and both re-applied every config
+// change (upstream issue #14). While a service runs, it owns that background
+// work and the panel keeps only what the user does in it.
+var services = 0
+
+function serviceStarted() {
+  services += 1
+}
+
+function serviceStopped() {
+  if (services > 0) services -= 1
+}
+
+function serviceRunning() {
+  return services > 0
+}
