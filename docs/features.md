@@ -79,4 +79,4 @@ Everything the plugin does, in one list.
 - Anything malformed in it is repaired rather than refused
 
 See [cli.md](cli.md) for what each command prints, and the
-[README](../README.md) for how the panel is used.
+[guide](guide.md) for how the panel is used.
