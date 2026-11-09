@@ -982,6 +982,44 @@ test("every pin writer carries the routing choice", () => {
   assert.match(editor, /Model\.nextPinOpen\(root\.open\)/)
 })
 
+test("the canvas follows Super+N while the panel is open, but not mid-drag", () => {
+  const panel = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+  assert.match(panel, /^\s*onFocusedWorkspaceKeyChanged: followFocus\(\)$/m)
+  assert.match(panel, /onDraggingChanged: if \(!dragging\) Qt\.callLater\(root\.followFocus\)/)
+  assert.match(panel, /onCarryingChanged: if \(carrying === 0\) Qt\.callLater\(root\.followFocus\)/)
+  const state = {
+    opened: true, workspacePinned: false, focusedWorkspaceKey: "2", selectedWorkspace: "1",
+    selectedSlot: 3, menuSlot: 3, armedDelete: "layout:custom-1",
+    canvas: { dragging: false, carrying: 0 }
+  }
+  const follow = qmlFunction("Panel.qml", "followFocus", state)
+  follow()
+  assert.equal(state.selectedWorkspace, "2")
+  // The slot, its menu and an armed delete were aimed at workspace 1.
+  assert.deepEqual([state.selectedSlot, state.menuSlot, state.armedDelete], [0, 0, ""])
+  // A drag in progress keeps its canvas; the release catches up.
+  state.focusedWorkspaceKey = "3"
+  state.canvas.dragging = true
+  follow()
+  assert.equal(state.selectedWorkspace, "2")
+  state.canvas.dragging = false
+  state.canvas.carrying = 1
+  follow()
+  assert.equal(state.selectedWorkspace, "2")
+  state.canvas.carrying = 0
+  follow()
+  assert.equal(state.selectedWorkspace, "3")
+  // A right-clicked chip stays selected; a special workspace is no target.
+  state.focusedWorkspaceKey = "4"
+  state.workspacePinned = true
+  follow()
+  assert.equal(state.selectedWorkspace, "3")
+  state.workspacePinned = false
+  state.focusedWorkspaceKey = ""
+  follow()
+  assert.equal(state.selectedWorkspace, "3")
+})
+
 // ------------------------------------------------------------ focus border
 
 function borderLua(config, steps) {

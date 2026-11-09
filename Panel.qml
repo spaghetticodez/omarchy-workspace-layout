@@ -417,7 +417,21 @@ Panel {
     }
   }
 
-  onFocusedWorkspaceKeyChanged: if (!workspacePinned && !opened) selectedWorkspace = focusedWorkspaceKey
+  // Super+N moves the canvas along, open or not: an edit made in the panel
+  // lands on the workspace on screen. A slot, its menu and an armed delete
+  // belong to the old canvas, so they go. Mid-drag the canvas stays put — the
+  // drag's numbers are for the old layout — and catches up once it is saved.
+  onFocusedWorkspaceKeyChanged: followFocus()
+
+  function followFocus() {
+    var key = focusedWorkspaceKey
+    if (workspacePinned || !key || key === selectedWorkspace) return
+    if (canvas.dragging || canvas.carrying > 0) return
+    selectedWorkspace = key
+    selectedSlot = 0
+    menuSlot = 0
+    armedDelete = ""
+  }
 
   function selectWorkspace(id) {
     selectedWorkspace = id
@@ -2147,6 +2161,9 @@ Panel {
             onPlacesSwapped: function(from, to) { root.swapPlaces(from, to) }
             onSplitRequested: function(slot, direction) { root.splitPlace(slot, direction) }
             onPlaceDropped: function(from, to, edge) { root.dropPlace(from, to, edge) }
+            // Later, so the release's commit or drop runs on the old canvas first.
+            onDraggingChanged: if (!dragging) Qt.callLater(root.followFocus)
+            onCarryingChanged: if (carrying === 0) Qt.callLater(root.followFocus)
             }
 
             // A workspace on a Hyprland built-in has nothing to edit, so say what
